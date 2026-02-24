@@ -11,9 +11,9 @@ ini_set('error_log', __DIR__ . '/../logs/php_error.log');
 // $banco = "platafo5_licred3";
 
 $host = "localhost";
-$usuario = "u438043218_licredzap";
-$senha = "Traffego444#";
-$banco = "u438043218_licredzap";
+$usuario = "u438043218_novo";
+$senha = "Licred2444#";
+$banco = "u438043218_novo";
 
 try {
     // Criando a conexão

@@ -1,0 +1,7 @@
+Array
+(
+    [sql] => SELECT nome_empresa, logo FROM configuracoes WHERE id = 1
+    [nome_empresa] => Licred
+    [logo_db] => logo_1745556063.png
+    [logo_path_final] => http://localhost/licred2/sistema_emprestimos_v1.8/sistema_emprestimos_v1/uploads/logo_1745556063.png
+)

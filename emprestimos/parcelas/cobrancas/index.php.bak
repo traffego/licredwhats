@@ -1,0 +1,696 @@
+<?php
+// Instruções de saída de buffer
+ob_start();
+
+require_once __DIR__ . '/../../../config.php';
+require_once __DIR__ . '/../../../includes/autenticacao.php';
+require_once __DIR__ . '/../../../includes/conexao.php';
+require_once __DIR__ . '/../../../includes/head.php';
+
+// Função para atualizar parcelas atrasadas
+function atualizarParcelasAtrasadas($conn) {
+    $hoje = date('Y-m-d');
+    
+    // Prepara a query que atualiza todas as parcelas pendentes com vencimento anterior a hoje
+    $sql = "UPDATE parcelas SET status = 'atrasado' 
+            WHERE status = 'pendente' AND vencimento < ?";
+    
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("s", $hoje);
+    $stmt->execute();
+    
+    // Retorna o número de linhas afetadas
+    return $stmt->affected_rows;
+}
+
+// Executar atualização de parcelas atrasadas antes de consultar
+$parcelas_atualizadas = atualizarParcelasAtrasadas($conn);
+
+// Se parcelas foram atualizadas, recarregar a página para refletir as mudanças
+if ($parcelas_atualizadas > 0) {
+    header("Location: " . $_SERVER['REQUEST_URI']);
+    exit;
+}
+
+// Filtros
+$filtro_status = isset($_GET['status']) ? $_GET['status'] : '';
+$filtro_data_inicio = isset($_GET['data_inicio']) ? $_GET['data_inicio'] : '';
+$filtro_data_fim = isset($_GET['data_fim']) ? $_GET['data_fim'] : '';
+$filtro_cliente = isset($_GET['cliente']) ? $_GET['cliente'] : '';
+
+// Verificar se há mensagem de sucesso na URL
+$mensagem_sucesso = '';
+$parcela_paga = '';
+$parcela_total = '';
+$submensagem = '';
+$cliente_nome = '';
+$emprestimo_id = '';
+$valor_emprestimo = '';
+$mostrar_modal = false;
+
+if (isset($_GET['sucesso']) && $_GET['sucesso'] == '1') {
+    $mostrar_modal = true;
+    
+    if (isset($_GET['parcela'])) {
+        $parcela_paga = $_GET['parcela'];
+        
+        // Obter informações adicionais se disponíveis
+        if (isset($_GET['cliente'])) {
+            $cliente_nome = urldecode($_GET['cliente']);
+        }
+        
+        if (isset($_GET['emprestimo'])) {
+            $emprestimo_id = $_GET['emprestimo'];
+        }
+        
+        if (isset($_GET['parcela_total'])) {
+            $parcela_total = $_GET['parcela_total'];
+        }
+        
+        if (isset($_GET['valor_emprestimo'])) {
+            $valor_emprestimo = $_GET['valor_emprestimo'];
+        }
+        
+        // Criar mensagem personalizada
+        if (!empty($cliente_nome)) {
+            if (!empty($parcela_paga) && !empty($parcela_total) && !empty($valor_emprestimo)) {
+                $valor_formatado = number_format($valor_emprestimo, 2, ',', '.');
+                $mensagem_completa = "Obrigado $cliente_nome, você pagou a parcela $parcela_paga de $parcela_total do seu empréstimo de R$$valor_formatado reais.";
+            } else if (!empty($parcela_paga) && !empty($parcela_total)) {
+                $mensagem_completa = "Obrigado $cliente_nome, você pagou a parcela $parcela_paga de $parcela_total do seu empréstimo.";
+            } else {
+                $mensagem_completa = "Obrigado $cliente_nome, seu pagamento foi registrado com sucesso!";
+            }
+        } else {
+            $mensagem_completa = "Pagamento registrado com sucesso!";
+        }
+    } else {
+        $mensagem_sucesso = 'Operação realizada com sucesso!';
+        $submensagem = '';
+    }
+}
+
+// Verificar se há mensagem de sucesso de envio de mensagem
+if (isset($_GET['mensagem_enviada']) && $_GET['mensagem_enviada'] == '1') {
+    $mostrar_modal = true;
+    
+    if (isset($_GET['parcela'])) {
+        $parcela_numero = $_GET['parcela'];
+        $mensagem_sucesso = "Mensagem enviada com sucesso para a parcela $parcela_numero!";
+    } else {
+        $mensagem_sucesso = "Mensagem enviada com sucesso!";
+    }
+    $submensagem = '';
+}
+
+// Prepara a query base
+$sql = "
+    SELECT 
+        p.id as parcela_id,
+        p.numero as parcela_numero,
+        p.valor,
+        p.valor_pago,
+        p.vencimento,
+        p.status,
+        p.data_pagamento,
+        p.forma_pagamento,
+        e.id as emprestimo_id,
+        e.valor_emprestado,
+        e.parcelas,
+        e.valor_parcela,
+        e.tipo_de_cobranca,
+        c.id as cliente_id,
+        c.nome as cliente_nome,
+        c.telefone
+    FROM 
+        parcelas p
+    INNER JOIN 
+        emprestimos e ON p.emprestimo_id = e.id
+    INNER JOIN 
+        clientes c ON e.cliente_id = c.id
+    WHERE 
+        1=1
+";
+
+// Adiciona filtros à query se fornecidos
+$parametros = [];
+$tipos = '';
+
+if (!empty($filtro_status)) {
+    $sql .= " AND p.status = ?";
+    $parametros[] = $filtro_status;
+    $tipos .= 's';
+}
+
+if (!empty($filtro_data_inicio)) {
+    $sql .= " AND p.vencimento >= ?";
+    $parametros[] = $filtro_data_inicio;
+    $tipos .= 's';
+}
+
+if (!empty($filtro_data_fim)) {
+    $sql .= " AND p.vencimento <= ?";
+    $parametros[] = $filtro_data_fim;
+    $tipos .= 's';
+}
+
+if (!empty($filtro_cliente)) {
+    $sql .= " AND c.nome LIKE ?";
+    $parametros[] = "%$filtro_cliente%";
+    $tipos .= 's';
+}
+
+// Adiciona ordem padrão
+$sql .= " ORDER BY 
+    CASE 
+        WHEN p.status = 'atrasado' THEN 1
+        WHEN p.status = 'pendente' AND p.vencimento < CURDATE() THEN 1 -- Mesma prioridade que atrasado
+        WHEN p.status = 'pendente' THEN 3
+        WHEN p.status = 'parcial' THEN 4
+        WHEN p.status = 'pago' THEN 5
+        ELSE 6
+    END,
+    p.vencimento ASC, 
+    c.nome ASC";
+
+// Prepara e executa a query
+$stmt = $conn->prepare($sql);
+
+if (!empty($parametros)) {
+    $stmt->bind_param($tipos, ...$parametros);
+}
+
+$stmt->execute();
+$result = $stmt->get_result();
+$parcelas = $result->fetch_all(MYSQLI_ASSOC);
+
+// Busca todos os clientes para o filtro
+$clientes = [];
+$stmt_clientes = $conn->query("SELECT id, nome FROM clientes ORDER BY nome");
+while ($cliente = $stmt_clientes->fetch_assoc()) {
+    $clientes[] = $cliente;
+}
+
+// Busca tipos de cobrança únicos
+$tipos_cobranca = [];
+$stmt_tipos = $conn->query("SELECT DISTINCT tipo_de_cobranca FROM emprestimos WHERE tipo_de_cobranca IS NOT NULL ORDER BY tipo_de_cobranca");
+while ($tipo = $stmt_tipos->fetch_assoc()) {
+    $tipos_cobranca[] = $tipo['tipo_de_cobranca'];
+}
+?>
+
+<div class="container py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h3 class="mb-0">Parcelas para Cobrança</h3>
+        <a href="<?= BASE_URL ?>emprestimos/index.php" class="btn btn-secondary">
+            <i class="bi bi-arrow-left"></i> Voltar para Empréstimos
+        </a>
+    </div>
+
+    <!-- Filtros -->
+    <div class="card mb-4">
+        <div class="card-header bg-light">
+            <h5 class="mb-0"><i class="bi bi-funnel"></i> Filtros</h5>
+        </div>
+        <div class="card-body">
+            <form id="form-filtros" class="row g-3">
+                <div class="col-md-3">
+                    <label for="status" class="form-label">Status</label>
+                    <select name="status" id="status" class="form-select">
+                        <option value="">Todos</option>
+                        <option value="pendente">Pendente</option>
+                        <option value="parcial">Parcial</option>
+                        <option value="pago">Pago</option>
+                        <option value="atrasado">Atrasado</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="data_inicio" class="form-label">Vencimento Início</label>
+                    <input type="date" name="data_inicio" id="data_inicio" class="form-control">
+                </div>
+                <div class="col-md-3">
+                    <label for="data_fim" class="form-label">Vencimento Fim</label>
+                    <input type="date" name="data_fim" id="data_fim" class="form-control">
+                </div>
+                <div class="col-md-3">
+                    <label for="cliente" class="form-label">Cliente</label>
+                    <input type="text" name="cliente" id="cliente" class="form-control" placeholder="Nome do cliente">
+                </div>
+                <div class="col-md-3">
+                    <label for="valor_min" class="form-label">Valor Mínimo</label>
+                    <input type="number" name="valor_min" id="valor_min" class="form-control" step="0.01" min="0">
+                </div>
+                <div class="col-md-3">
+                    <label for="valor_max" class="form-label">Valor Máximo</label>
+                    <input type="number" name="valor_max" id="valor_max" class="form-control" step="0.01" min="0">
+                </div>
+                <div class="col-md-3">
+                    <label for="tipo_cobranca" class="form-label">Tipo de Cobrança</label>
+                    <select name="tipo_cobranca" id="tipo_cobranca" class="form-select">
+                        <option value="">Todos</option>
+                        <?php foreach ($tipos_cobranca as $tipo): ?>
+                            <option value="<?= $tipo ?>"><?= ucfirst(str_replace('_', ' ', $tipo)) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="ordem" class="form-label">Ordenar por</label>
+                    <select name="ordem" id="ordem" class="form-select">
+                        <option value="prioridade">Prioridade</option>
+                        <option value="vencimento">Data de Vencimento</option>
+                        <option value="valor">Valor</option>
+                        <option value="cliente">Nome do Cliente</option>
+                    </select>
+                </div>
+                <div class="col-12 d-flex justify-content-between align-items-end">
+                    <div>
+                        <label for="por-pagina" class="form-label">Itens por página</label>
+                        <select id="por-pagina" class="form-select" style="width: auto;">
+                            <option value="25">25</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button type="reset" class="btn btn-outline-secondary">Limpar</button>
+                        <button type="submit" class="btn btn-primary">Filtrar</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Cards Estatísticos -->
+    <div class="row g-3 mb-4" id="cards-estatisticos">
+        <div class="col-md-3">
+            <div class="card bg-primary text-white h-100">
+                <div class="card-body">
+                    <h6 class="card-title">Total de Parcelas</h6>
+                    <h4 class="mb-0" id="total-parcelas">0</h4>
+                    <div class="small" id="total-valor">R$ 0,00</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-warning text-dark h-100">
+                <div class="card-body">
+                    <h6 class="card-title">Parcelas Pendentes</h6>
+                    <h4 class="mb-0" id="pendentes-parcelas">0</h4>
+                    <div class="small" id="pendentes-valor">R$ 0,00</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-danger text-white h-100">
+                <div class="card-body">
+                    <h6 class="card-title">Parcelas Atrasadas</h6>
+                    <h4 class="mb-0" id="atrasadas-parcelas">0</h4>
+                    <div class="small" id="atrasadas-valor">R$ 0,00</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-info text-white h-100">
+                <div class="card-body">
+                    <h6 class="card-title">Parcelas Parciais</h6>
+                    <h4 class="mb-0" id="parciais-parcelas">0</h4>
+                    <div class="small" id="parciais-valor">R$ 0,00</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Lista de Parcelas -->
+    <div class="card">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover" id="tabela-parcelas">
+                    <thead>
+                        <tr>
+                            <th>Cliente</th>
+                            <th>Telefone</th>
+                            <th>Empréstimo</th>
+                            <th>Parcela</th>
+                            <th>Status</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody-parcelas">
+                        <!-- Dados serão carregados via AJAX -->
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- Paginação -->
+            <div class="d-flex justify-content-between align-items-center mt-3">
+                <div class="text-muted" id="info-paginacao">
+                    Mostrando <span id="inicio-registros">0</span> a <span id="fim-registros">0</span> de <span id="total-registros">0</span> registros
+                </div>
+                <nav aria-label="Navegação de página">
+                    <ul class="pagination mb-0" id="paginacao">
+                        <!-- Paginação será gerada via JavaScript -->
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal de Sucesso -->
+<div class="modal fade" id="modalSucesso" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-body text-center py-4">
+                <div class="mb-3">
+                    <i class="bi bi-check-circle-fill text-success" style="font-size: 3rem;"></i>
+                </div>
+                <h4 class="mb-3" id="mensagem-completa">Operação Realizada com Sucesso!</h4>
+            </div>
+            <div class="modal-footer justify-content-center border-0 pb-4">
+                <button type="button" class="btn btn-success px-4" data-bs-dismiss="modal">
+                    <i class="bi bi-check-lg me-2"></i>OK
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Função para formatar telefone
+function formatarTelefone(telefone) {
+    // Remove caracteres não numéricos
+    const numero = telefone.replace(/\D/g, '');
+    
+    // Verifica se é celular (11 dígitos) ou telefone fixo (10 dígitos)
+    if (numero.length === 11) {
+        return `(${numero.slice(0, 2)}) ${numero.slice(2, 7)}-${numero.slice(7)}`;
+    } else if (numero.length === 10) {
+        return `(${numero.slice(0, 2)}) ${numero.slice(2, 6)}-${numero.slice(6)}`;
+    }
+    return telefone;
+}
+
+// Função para formatar moeda
+function formatarMoeda(valor) {
+    return parseFloat(valor).toLocaleString('pt-BR', {
+        style: 'currency',
+        currency: 'BRL'
+    });
+}
+
+// Função para formatar data
+function formatarData(data) {
+    return new Date(data).toLocaleDateString('pt-BR');
+}
+
+// Função para gerar HTML da linha da tabela
+function gerarLinhaTabela(parcela) {
+    let statusClass = '';
+    switch (parcela.status) {
+        case 'pago':
+            statusClass = 'bg-success text-white';
+            break;
+        case 'parcial':
+            statusClass = 'bg-info text-white';
+            break;
+        case 'atrasado':
+            statusClass = 'bg-danger text-white';
+            break;
+        case 'pendente':
+            statusClass = 'bg-warning text-dark';
+            break;
+    }
+
+    let html = `
+        <tr class="${parcela.status === 'atrasado' ? 'table-danger' : ''}">
+            <td>${parcela.cliente_nome}</td>
+            <td>${formatarTelefone(parcela.telefone)}</td>
+            <td>
+                <span class="badge bg-secondary">#${parcela.emprestimo_id}</span>
+                <small class="d-block text-muted">${parcela.tipo_de_cobranca ? ucfirst(parcela.tipo_de_cobranca.replace(/_/g, ' ')) : ''}</small>
+            </td>
+            <td>
+                <div><strong>${parcela.parcela_numero} de ${parcela.parcelas}</strong></div>
+                <div>${formatarMoeda(parcela.valor)}</div>
+                <div class="small text-muted">${formatarData(parcela.vencimento)}</div>
+                ${parcela.status === 'parcial' && parcela.valor_pago ? `
+                    <div class="small">
+                        <span class="text-success">Pago: ${formatarMoeda(parcela.valor_pago)}</span><br>
+                        <span class="text-danger">Falta: ${formatarMoeda(parcela.valor - parcela.valor_pago)}</span>
+                    </div>
+                ` : ''}
+            </td>
+            <td>
+                <span class="badge ${statusClass}">${ucfirst(parcela.status)}</span>
+            </td>
+            <td>
+                <div class="btn-group">
+                    <a href="${BASE_URL}emprestimos/visualizar.php?id=${parcela.emprestimo_id}&parcela=${parcela.parcela_numero}&origem=cobrancas#pagamento" 
+                       class="btn btn-sm btn-success" title="Registrar Pagamento">
+                        <i class="bi bi-cash-coin"></i> Pagar
+                    </a>
+                    <button type="button" class="btn btn-sm btn-primary" title="Enviar Cobrança" 
+                            onclick="enviarCobranca(${parcela.cliente_id}, ${parcela.emprestimo_id}, ${parcela.parcela_id})">
+                        <i class="bi bi-whatsapp"></i> Cobrar
+                    </button>
+                </div>
+            </td>
+        </tr>
+    `;
+    return html;
+}
+
+// Função para gerar paginação
+function gerarPaginacao(paginaAtual, totalPaginas) {
+    let html = `
+        <li class="page-item ${paginaAtual === 1 ? 'disabled' : ''}">
+            <a class="page-link" href="#" data-pagina="${paginaAtual - 1}" aria-label="Anterior">
+                <span aria-hidden="true">&laquo;</span>
+            </a>
+        </li>
+    `;
+
+    for (let i = 1; i <= totalPaginas; i++) {
+        if (
+            i === 1 || // Primeira página
+            i === totalPaginas || // Última página
+            (i >= paginaAtual - 2 && i <= paginaAtual + 2) // 2 páginas antes e depois da atual
+        ) {
+            html += `
+                <li class="page-item ${i === paginaAtual ? 'active' : ''}">
+                    <a class="page-link" href="#" data-pagina="${i}">${i}</a>
+                </li>
+            `;
+        } else if (i === paginaAtual - 3 || i === paginaAtual + 3) {
+            html += `
+                <li class="page-item disabled">
+                    <span class="page-link">...</span>
+                </li>
+            `;
+        }
+    }
+
+    html += `
+        <li class="page-item ${paginaAtual === totalPaginas ? 'disabled' : ''}">
+            <a class="page-link" href="#" data-pagina="${paginaAtual + 1}" aria-label="Próximo">
+                <span aria-hidden="true">&raquo;</span>
+            </a>
+        </li>
+    `;
+
+    return html;
+}
+
+// Função para carregar parcelas
+function carregarParcelas(pagina = 1) {
+    const form = document.getElementById('form-filtros');
+    const formData = new FormData(form);
+    formData.append('pagina', pagina);
+    formData.append('por_pagina', document.getElementById('por-pagina').value);
+    
+    const queryString = new URLSearchParams(formData).toString();
+    
+    // Mostra indicador de carregamento
+    document.getElementById('tbody-parcelas').innerHTML = `
+        <tr>
+            <td colspan="6" class="text-center py-4">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Carregando...</span>
+                </div>
+            </td>
+        </tr>
+    `;
+    
+    // Carrega parcelas
+    fetch(`carregar_parcelas.php?${queryString}`)
+        .then(response => response.json())
+        .then(data => {
+            const tbody = document.getElementById('tbody-parcelas');
+            const paginacao = document.getElementById('paginacao');
+            
+            if (data.parcelas.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" class="text-center py-4">
+                            <div class="text-muted">
+                                <i class="bi bi-inbox h4 d-block"></i>
+                                Nenhuma parcela encontrada com os filtros aplicados
+                            </div>
+                        </td>
+                    </tr>
+                `;
+                paginacao.innerHTML = '';
+            } else {
+                tbody.innerHTML = data.parcelas.map(parcela => gerarLinhaTabela(parcela)).join('');
+                paginacao.innerHTML = gerarPaginacao(data.pagina_atual, data.total_paginas);
+                
+                // Atualiza informações de paginação
+                document.getElementById('inicio-registros').textContent = data.inicio;
+                document.getElementById('fim-registros').textContent = data.fim;
+                document.getElementById('total-registros').textContent = data.total;
+            }
+            
+            // Adiciona event listeners para links de paginação
+            paginacao.querySelectorAll('.page-link').forEach(link => {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const pagina = parseInt(this.dataset.pagina);
+                    if (!isNaN(pagina)) {
+                        carregarParcelas(pagina);
+                    }
+                });
+            });
+        })
+        .catch(error => {
+            console.error('Erro ao carregar parcelas:', error);
+            document.getElementById('tbody-parcelas').innerHTML = `
+                <tr>
+                    <td colspan="6" class="text-center py-4">
+                        <div class="text-danger">
+                            <i class="bi bi-exclamation-triangle h4 d-block"></i>
+                            Erro ao carregar parcelas. Por favor, tente novamente.
+                        </div>
+                    </td>
+                </tr>
+            `;
+        });
+    
+    // Carrega estatísticas
+    carregarEstatisticas();
+}
+
+// Função para carregar estatísticas
+function carregarEstatisticas() {
+    const form = document.getElementById('form-filtros');
+    const formData = new FormData(form);
+    const queryString = new URLSearchParams(formData).toString();
+    
+    fetch(`carregar_estatisticas.php?${queryString}`)
+        .then(response => response.json())
+        .then(data => {
+            // Atualiza total
+            document.getElementById('total-parcelas').textContent = data.total.total_parcelas;
+            document.getElementById('total-valor').textContent = formatarMoeda(data.total.valor_total);
+            
+            // Atualiza pendentes
+            document.getElementById('pendentes-parcelas').textContent = data.pendente.total_parcelas;
+            document.getElementById('pendentes-valor').textContent = formatarMoeda(data.pendente.valor_total);
+            
+            // Atualiza atrasadas
+            document.getElementById('atrasadas-parcelas').textContent = data.atrasado.total_parcelas;
+            document.getElementById('atrasadas-valor').textContent = formatarMoeda(data.atrasado.valor_total);
+            
+            // Atualiza parciais
+            document.getElementById('parciais-parcelas').textContent = data.parcial.total_parcelas;
+            document.getElementById('parciais-valor').textContent = formatarMoeda(data.parcial.valor_total);
+        })
+        .catch(error => {
+            console.error('Erro ao carregar estatísticas:', error);
+        });
+}
+
+// Função para enviar cobrança
+function enviarCobranca(clienteId, emprestimoId, parcelaId) {
+    fetch(`${BASE_URL}emprestimos/parcelas/api_parcela.php?emprestimo_id=${emprestimoId}&parcela_id=${parcelaId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                const parcela = data.parcela;
+                const cliente = data.cliente;
+                
+                const dataFormatada = formatarData(parcela.vencimento);
+                const valorFormatado = formatarMoeda(parcela.valor);
+                
+                let mensagem = `Olá ${cliente.nome}, tudo bem? 😊\n\n`;
+                mensagem += `Gostaríamos de lembrar sobre a parcela ${parcela.numero}/${parcela.total_parcelas} `;
+                mensagem += `do seu empréstimo com vencimento em ${dataFormatada}, `;
+                mensagem += `no valor de ${valorFormatado}.\n\n`;
+                mensagem += `Caso já tenha efetuado o pagamento, por favor desconsidere esta mensagem.`;
+                
+                const mensagemCodificada = encodeURIComponent(mensagem);
+                window.open(`https://wa.me/${formatarNumeroWhatsApp(cliente.telefone)}?text=${mensagemCodificada}`, '_blank');
+            } else {
+                alert('Erro ao buscar dados da parcela: ' + data.message);
+            }
+        })
+        .catch(error => {
+            console.error('Erro:', error);
+            alert('Erro ao processar a requisição. Veja o console para mais detalhes.');
+        });
+}
+
+// Função para formatar número para WhatsApp
+function formatarNumeroWhatsApp(telefone) {
+    const numero = telefone.replace(/\D/g, '');
+    if (numero.startsWith('0')) {
+        return '55' + numero.substring(1);
+    }
+    if (!numero.startsWith('55')) {
+        return '55' + numero;
+    }
+    return numero;
+}
+
+// Função para capitalizar primeira letra
+function ucfirst(str) {
+    return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+// Event Listeners
+document.getElementById('form-filtros').addEventListener('submit', function(e) {
+    e.preventDefault();
+    carregarParcelas(1);
+});
+
+document.getElementById('form-filtros').addEventListener('reset', function(e) {
+    setTimeout(() => carregarParcelas(1), 0);
+});
+
+document.getElementById('por-pagina').addEventListener('change', function() {
+    carregarParcelas(1);
+});
+
+// Carrega os dados iniciais
+document.addEventListener('DOMContentLoaded', function() {
+    carregarParcelas(1);
+});
+</script>
+
+<?php
+// Função para formatar telefone
+function formatarTelefone($telefone) {
+    // Remove caracteres não numéricos
+    $telefone = preg_replace('/[^0-9]/', '', $telefone);
+    
+    // Verifica se é celular (11 dígitos) ou telefone fixo (10 dígitos)
+    if (strlen($telefone) === 11) {
+        return '(' . substr($telefone, 0, 2) . ') ' . substr($telefone, 2, 5) . '-' . substr($telefone, 7);
+    } elseif (strlen($telefone) === 10) {
+        return '(' . substr($telefone, 0, 2) . ') ' . substr($telefone, 2, 4) . '-' . substr($telefone, 6);
+    } else {
+        return $telefone; // Retorna sem formatação se não for um formato reconhecido
+    }
+}
+
+require_once __DIR__ . '/../../../includes/footer.php';
+?> 

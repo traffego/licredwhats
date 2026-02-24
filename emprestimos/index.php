@@ -199,11 +199,11 @@ $atrasado = $result_atrasado->fetch_assoc();
                 </div>
                 <div class="col-md-8">
                     <div class="row g-2">
-                        <div class="col-sm-6 col-md-5">
+                        <div class="col-sm-6 col-md-3">
                             <input type="text" name="busca" class="form-control form-control-sm" 
                                    placeholder="Buscar por cliente...">
                         </div>
-                        <div class="col-sm-6 col-md-3">
+                        <div class="col-sm-6 col-md-2">
                             <select name="tipo" class="form-select form-select-sm">
                                 <option value="">Todos os tipos</option>
                                 <option value="parcelada_comum">Parcelada Comum</option>
@@ -216,6 +216,13 @@ $atrasado = $result_atrasado->fetch_assoc();
                                 <option value="ativo">Ativo</option>
                                 <option value="atrasado">Atrasado</option>
                                 <option value="quitado">Quitado</option>
+                            </select>
+                        </div>
+                        <div class="col-sm-6 col-md-3">
+                            <select name="ordem" class="form-select form-select-sm">
+                                <option value="">Ordenar por</option>
+                                <option value="data_inicio">Por Início</option>
+                                <option value="data_quitacao">Por Data da Quitação</option>
                             </select>
                         </div>
                         <div class="col-sm-6 col-md-2">

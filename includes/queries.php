@@ -112,9 +112,14 @@ function buscarTodosEmprestimosComCliente(mysqli $conn, int $pagina = 1, int $po
             LEFT JOIN usuarios u ON e.investidor_id = u.id
             WHERE " . implode(" AND ", $where_conditions);
 
-    // Adiciona ordenação
-    if (!empty($filtros['ordem'])) {
-        $sql .= " ORDER BY " . $filtros['ordem'];
+    // Adiciona ordenação (whitelist para evitar SQL injection)
+    $ordens_permitidas = [
+        'data_inicio' => 'e.data_inicio DESC',
+        'data_quitacao' => '(SELECT MAX(p2.data_pagamento) FROM parcelas p2 WHERE p2.emprestimo_id = e.id) DESC'
+    ];
+    
+    if (!empty($filtros['ordem']) && isset($ordens_permitidas[$filtros['ordem']])) {
+        $sql .= " ORDER BY " . $ordens_permitidas[$filtros['ordem']];
     } else {
         $sql .= " ORDER BY e.id DESC";
     }

@@ -689,6 +689,18 @@ require_once '../includes/head.php';
 </div>
 
 <script>
+    // Toggle dos campos de provedor WhatsApp (global para funcionar com onchange inline)
+    function toggleWhatsAppProvider() {
+        var provider = $('input[name="whatsapp_provider"]:checked').val();
+        if (provider === 'zapi') {
+            $('#menuia_fields').hide();
+            $('#zapi_fields').show();
+        } else {
+            $('#menuia_fields').show();
+            $('#zapi_fields').hide();
+        }
+    }
+
     // Máscaras para campos
     $(document).ready(function() {
         $('.telefone').mask('(00) 00000-0000');
@@ -749,17 +761,7 @@ require_once '../includes/head.php';
         addPasswordToggle('zapi_token');
         addPasswordToggle('zapi_client_token');
         
-        // Toggle dos campos de provedor WhatsApp
-        function toggleWhatsAppProvider() {
-            var provider = $('input[name="whatsapp_provider"]:checked').val();
-            if (provider === 'zapi') {
-                $('#menuia_fields').hide();
-                $('#zapi_fields').show();
-            } else {
-                $('#menuia_fields').show();
-                $('#zapi_fields').hide();
-            }
-        }
+        // Aplicar estado inicial dos campos de provedor
         toggleWhatsAppProvider();
         
         // Manter a aba ativa após submit

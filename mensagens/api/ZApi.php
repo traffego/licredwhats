@@ -22,12 +22,36 @@ class ZApi {
     }
     
     /**
+     * Normaliza o número de telefone para o formato esperado pela Z-API
+     * Remove caracteres não numéricos e garante DDI 55
+     * @param string $phone - Número do telefone
+     * @return string - Número formatado (ex: 5521982188560)
+     */
+    public static function normalizePhone(string $phone): string {
+        // Remove tudo que não é número
+        $phone = preg_replace('/[^0-9]/', '', $phone);
+        
+        // Se começa com 55 e tem 12-13 dígitos, já está no formato correto
+        if (preg_match('/^55\d{10,11}$/', $phone)) {
+            return $phone;
+        }
+        
+        // Se tem 10-11 dígitos (DDD + número), adiciona 55
+        if (strlen($phone) >= 10 && strlen($phone) <= 11) {
+            return '55' . $phone;
+        }
+        
+        return $phone;
+    }
+    
+    /**
      * Envia mensagem de texto simples
      * @param string $phone - Número do telefone com DDI (ex: 5511999999999)
      * @param string $message - Texto da mensagem
      * @return object - Resposta da API
      */
     public function sendText(string $phone, string $message): object {
+        $phone = self::normalizePhone($phone);
         return $this->request('/send-text', [
             'phone' => $phone,
             'message' => $message
@@ -151,7 +175,17 @@ class ZApi {
         
         // Se retornou erro da API
         if ($httpCode >= 400) {
-            $errorMsg = isset($decoded->message) ? $decoded->message : 'Erro HTTP ' . $httpCode;
+            $errorMsg = 'Erro HTTP ' . $httpCode;
+            if (isset($decoded->message)) {
+                $errorMsg .= ' - ' . $decoded->message;
+            }
+            if (isset($decoded->error)) {
+                $errorMsg .= ' - ' . (is_string($decoded->error) ? $decoded->error : json_encode($decoded->error));
+            }
+            // Incluir telefone usado se disponível no body
+            if (isset($body['phone'])) {
+                $errorMsg .= ' (telefone: ' . $body['phone'] . ')';
+            }
             throw new Exception('Erro Z-API: ' . $errorMsg);
         }
         

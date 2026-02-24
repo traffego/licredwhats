@@ -290,7 +290,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['salvar_config'])) {
     $stmt = $conn->prepare($sql);
     
     // Criar o conjunto de parâmetros
-    $param_types = "ssssssssssssssssssssd";
+    $param_types = "sssssssssssssssssssd";
     $params = [
         $nome_empresa,
         $email_sistema,

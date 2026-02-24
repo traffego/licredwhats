@@ -619,11 +619,61 @@ require_once '../includes/head.php';
                                                 <input type="password" class="form-control" id="zapi_client_token" name="zapi_client_token" value="<?= htmlspecialchars($config['zapi_client_token'] ?? '') ?>">
                                             </div>
                                             <div class="col-12">
-                                                <div class="alert alert-info">
+                                                <div class="alert alert-info mb-0">
                                                     <strong>Dica:</strong> Obtenha suas credenciais em <a href="https://z-api.io" target="_blank" class="alert-link">z-api.io</a>. O Client Token é opcional e pode ser configurado na aba Segurança da sua conta Z-API.
                                                 </div>
                                             </div>
                                         </div>
+                                        
+                                        <!-- Painel de Conexão Z-API -->
+                                        <?php if (!empty($config['zapi_instance_id']) && !empty($config['zapi_token'])): ?>
+                                        <div class="mt-4">
+                                            <hr>
+                                            <h6 class="fw-bold mb-3"><i class="bi bi-plug"></i> Conexão WhatsApp</h6>
+                                            
+                                            <!-- Status da Conexão -->
+                                            <div class="d-flex align-items-center gap-3 mb-3">
+                                                <div id="zapi_status_badge">
+                                                    <span class="badge bg-secondary fs-6">
+                                                        <i class="bi bi-hourglass-split"></i> Verificando...
+                                                    </span>
+                                                </div>
+                                                <div class="btn-group btn-group-sm">
+                                                    <button type="button" class="btn btn-outline-primary" onclick="zapiCheckStatus()" title="Verificar status">
+                                                        <i class="bi bi-arrow-clockwise"></i> Verificar
+                                                    </button>
+                                                    <button type="button" class="btn btn-outline-danger" id="btn_zapi_disconnect" onclick="zapiDisconnect()" style="display:none;" title="Desconectar">
+                                                        <i class="bi bi-x-circle"></i> Desconectar
+                                                    </button>
+                                                    <button type="button" class="btn btn-outline-success" id="btn_zapi_reconnect" onclick="zapiRestart()" style="display:none;" title="Reconectar">
+                                                        <i class="bi bi-arrow-repeat"></i> Reconectar
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            
+                                            <!-- QR Code -->
+                                            <div id="zapi_qrcode_area" style="display:none;">
+                                                <div class="card border-warning">
+                                                    <div class="card-body text-center">
+                                                        <p class="text-muted mb-2">Escaneie o QR Code com seu WhatsApp para conectar:</p>
+                                                        <div id="zapi_qrcode_img" class="d-inline-block p-2 bg-white rounded shadow-sm">
+                                                            <div class="spinner-border text-primary" role="status">
+                                                                <span class="visually-hidden">Carregando...</span>
+                                                            </div>
+                                                        </div>
+                                                        <p class="text-muted mt-2 mb-0"><small><i class="bi bi-info-circle"></i> O QR Code atualiza automaticamente a cada 15 segundos</small></p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            
+                                            <!-- Info conectado -->
+                                            <div id="zapi_connected_info" style="display:none;">
+                                                <div class="alert alert-success mb-0">
+                                                    <i class="bi bi-check-circle-fill"></i> Sua instância está conectada e pronta para enviar mensagens.
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <?php endif; ?>
                                     </div>
                                 </div>
                             </div>
@@ -772,8 +822,171 @@ require_once '../includes/head.php';
         
         $('#configTabs button').on('shown.bs.tab', function (e) {
             localStorage.setItem('activeConfigTab', $(e.target).data('bs-target'));
+            // Auto-check status quando abrir a aba WhatsApp com Z-API selecionado
+            if ($(e.target).data('bs-target') === '#menuia' && $('input[name="whatsapp_provider"]:checked').val() === 'zapi') {
+                zapiCheckStatus();
+            }
         });
+        
+        // Auto-check status ao carregar se a aba WhatsApp estiver ativa e Z-API selecionado
+        if ($('#menuia').hasClass('show') && $('input[name="whatsapp_provider"]:checked').val() === 'zapi') {
+            zapiCheckStatus();
+        }
     });
+
+    // ========== Z-API Connection Panel ==========
+    var zapiQrInterval = null;
+    var zapiQrAttempts = 0;
+    var zapiMaxQrAttempts = 20; // ~5 minutos (20 x 15s)
+
+    function zapiCheckStatus() {
+        $('#zapi_status_badge').html('<span class="badge bg-secondary fs-6"><i class="bi bi-hourglass-split"></i> Verificando...</span>');
+        
+        $.ajax({
+            url: 'zapi_proxy.php?action=status',
+            method: 'GET',
+            dataType: 'json',
+            timeout: 15000,
+            success: function(data) {
+                if (data.connected === true) {
+                    zapiSetConnected();
+                } else {
+                    var errorMsg = data.error || 'Não conectado';
+                    zapiSetDisconnected(errorMsg);
+                }
+            },
+            error: function(xhr) {
+                var msg = 'Erro ao verificar status';
+                try {
+                    var resp = JSON.parse(xhr.responseText);
+                    if (resp.error) msg = resp.error;
+                } catch(e) {}
+                zapiSetDisconnected(msg);
+            }
+        });
+    }
+
+    function zapiSetConnected() {
+        zapiStopQrPolling();
+        $('#zapi_status_badge').html('<span class="badge bg-success fs-6"><i class="bi bi-check-circle-fill"></i> Conectado</span>');
+        $('#btn_zapi_disconnect').show();
+        $('#btn_zapi_reconnect').hide();
+        $('#zapi_qrcode_area').hide();
+        $('#zapi_connected_info').show();
+    }
+
+    function zapiSetDisconnected(msg) {
+        $('#zapi_status_badge').html('<span class="badge bg-danger fs-6"><i class="bi bi-x-circle-fill"></i> Desconectado</span>');
+        $('#btn_zapi_disconnect').hide();
+        $('#btn_zapi_reconnect').show();
+        $('#zapi_connected_info').hide();
+        $('#zapi_qrcode_area').show();
+        zapiStartQrPolling();
+    }
+
+    function zapiLoadQrCode() {
+        $.ajax({
+            url: 'zapi_proxy.php?action=qrcode',
+            method: 'GET',
+            dataType: 'json',
+            timeout: 15000,
+            success: function(data) {
+                if (data.value) {
+                    // A Z-API retorna a imagem em base64
+                    var imgSrc = data.value;
+                    // Se não começa com data:, adicionar o prefixo
+                    if (!imgSrc.startsWith('data:')) {
+                        imgSrc = 'data:image/png;base64,' + imgSrc;
+                    }
+                    $('#zapi_qrcode_img').html('<img src="' + imgSrc + '" alt="QR Code Z-API" style="max-width: 280px; width: 100%;" class="rounded">');
+                    zapiQrAttempts++;
+                    
+                    // Verificar status após carregar QR (pode já ter conectado)
+                    if (zapiQrAttempts % 2 === 0) {
+                        zapiSilentStatusCheck();
+                    }
+                    
+                    if (zapiQrAttempts >= zapiMaxQrAttempts) {
+                        zapiStopQrPolling();
+                        $('#zapi_qrcode_img').html('<div class="text-muted p-3"><i class="bi bi-exclamation-triangle"></i> Tempo expirado. Clique em <strong>Reconectar</strong> para gerar um novo QR Code.</div>');
+                    }
+                } else if (data.connected === true) {
+                    // Já está conectado
+                    zapiSetConnected();
+                } else {
+                    $('#zapi_qrcode_img').html('<div class="text-warning p-3"><i class="bi bi-exclamation-triangle"></i> Aguardando QR Code...</div>');
+                }
+            },
+            error: function() {
+                $('#zapi_qrcode_img').html('<div class="text-danger p-3"><i class="bi bi-exclamation-circle"></i> Erro ao carregar QR Code</div>');
+            }
+        });
+    }
+
+    function zapiSilentStatusCheck() {
+        $.ajax({
+            url: 'zapi_proxy.php?action=status',
+            method: 'GET',
+            dataType: 'json',
+            timeout: 10000,
+            success: function(data) {
+                if (data.connected === true) {
+                    zapiSetConnected();
+                }
+            }
+        });
+    }
+
+    function zapiStartQrPolling() {
+        zapiStopQrPolling();
+        zapiQrAttempts = 0;
+        zapiLoadQrCode();
+        zapiQrInterval = setInterval(zapiLoadQrCode, 15000);
+    }
+
+    function zapiStopQrPolling() {
+        if (zapiQrInterval) {
+            clearInterval(zapiQrInterval);
+            zapiQrInterval = null;
+        }
+    }
+
+    function zapiDisconnect() {
+        if (!confirm('Tem certeza que deseja desconectar o WhatsApp?')) return;
+        
+        $('#zapi_status_badge').html('<span class="badge bg-warning fs-6"><i class="bi bi-hourglass-split"></i> Desconectando...</span>');
+        
+        $.ajax({
+            url: 'zapi_proxy.php?action=disconnect',
+            method: 'GET',
+            dataType: 'json',
+            timeout: 15000,
+            success: function() {
+                zapiSetDisconnected('Desconectado pelo usuário');
+            },
+            error: function() {
+                zapiCheckStatus();
+            }
+        });
+    }
+
+    function zapiRestart() {
+        $('#zapi_status_badge').html('<span class="badge bg-warning fs-6"><i class="bi bi-hourglass-split"></i> Reiniciando...</span>');
+        $('#zapi_qrcode_img').html('<div class="spinner-border text-primary" role="status"><span class="visually-hidden">Carregando...</span></div>');
+        
+        $.ajax({
+            url: 'zapi_proxy.php?action=restart',
+            method: 'GET',
+            dataType: 'json',
+            timeout: 15000,
+            complete: function() {
+                // Aguardar 3 segundos para a instância reiniciar
+                setTimeout(function() {
+                    zapiCheckStatus();
+                }, 3000);
+            }
+        });
+    }
 </script>
 
 <?php require_once '../includes/footer.php'; ?> 

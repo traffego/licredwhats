@@ -1,0 +1,9 @@
+node_modules/
+.env
+data/auth_info
+vendor/
+*.sql
+public_html.zip
+logs/*.log
+cache/
+uploads/

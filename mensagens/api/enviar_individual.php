@@ -80,7 +80,17 @@ if (isset($_GET['telefone'])) {
     $telefone = trim($_GET['telefone']);
     // Limpar formatação do telefone (remover parênteses, traços, espaços)
     $telefone = preg_replace('/[^0-9]/', '', $telefone);
-    
+
+    // Normalizar telefones antigos de 8 dígitos (sem o nono dígito)
+    // Ex: (89) 8145-9368 → 8981459368 (10 dígitos, 3º dígito != 9) → 89981459368
+    if (strlen($telefone) === 10) {
+        $ddd    = substr($telefone, 0, 2);
+        $numero = substr($telefone, 2);
+        if ($numero[0] !== '9') {
+            $telefone = $ddd . '9' . $numero; // 11 dígitos
+        }
+    }
+
     // Adicionar código do país (55) se não estiver presente
     if (strlen($telefone) <= 11) {
         $telefone = "55" . $telefone;

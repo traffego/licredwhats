@@ -30,17 +30,27 @@ class ZApi {
     public static function normalizePhone(string $phone): string {
         // Remove tudo que não é número
         $phone = preg_replace('/[^0-9]/', '', $phone);
-        
+
         // Se começa com 55 e tem 12-13 dígitos, já está no formato correto
         if (preg_match('/^55\d{10,11}$/', $phone)) {
             return $phone;
         }
-        
+
+        // Normalizar telefones antigos de 8 dígitos (sem o nono dígito)
+        // Ex: 8981459368 (10 dígitos, 3º dígito != 9) → 89981459368
+        if (strlen($phone) === 10) {
+            $ddd    = substr($phone, 0, 2);
+            $numero = substr($phone, 2);
+            if ($numero[0] !== '9') {
+                $phone = $ddd . '9' . $numero; // 11 dígitos
+            }
+        }
+
         // Se tem 10-11 dígitos (DDD + número), adiciona 55
         if (strlen($phone) >= 10 && strlen($phone) <= 11) {
             return '55' . $phone;
         }
-        
+
         return $phone;
     }
     
